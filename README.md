@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-Una aplicación de escritorio minimalista y eficiente para descargar archivos de Google Drive con un solo clic.
+Una aplicación de escritorio minimalista para descargar archivos de Google Drive. Su propósito principal es ocultar el enlace de descarga, permitiendo distribuir un único ejecutable que garantiza que todos los usuarios obtengan exactamente el mismo archivo, sin revelar la fuente original.
 
  <!-- Reemplazar con una captura de pantalla real -->
 
