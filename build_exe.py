@@ -18,28 +18,33 @@ def build_exe():
         print("PyInstaller no está instalado. Instalando...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
     
-    # Determinar los parámetros según el sistema operativo
+    # Determinar los separadores de ruta según el sistema operativo
     if os.name == 'nt':  # Windows
-        add_data_param = "--add-data=icon.ico;."
+        sep = ';'
     else:  # Linux/Mac
-        add_data_param = "--add-data=icon.ico:."
-    
+        sep = ':'
+        
+    # Archivos y carpetas a incluir en el ejecutable
+    add_data_files = [
+        f"icon.ico{sep}.",
+        f".env{sep}."
+    ]
+
     # Comando para compilar el ejecutable
-    # Usamos --onefile para crear un solo archivo ejecutable
-    # Usamos --windowed para que no se abra la consola (apropiado para GUI)
-    # Usamos --icon para especificar el icono
-    # Usamos --name para especificar el nombre del ejecutable
-    # Usamos --add-data para incluir el icono en el ejecutable
     cmd = [
         "pyinstaller",
-        "--onefile",           # Crear un solo archivo ejecutable
-        "--windowed",          # No abrir consola (apropiado para GUI)
-        "--icon=icon.ico",     # Icono para el ejecutable
-        "--name=GD_Downloader", # Nombre del ejecutable
-        add_data_param,        # Incluir el icono en el ejecutable
-        "main.py"              # Archivo de entrada
+        "--onefile",                   # Crear un solo archivo ejecutable
+        "--windowed",                  # No abrir consola (apropiado para GUI)
+        "--icon=icon.ico",             # Icono para el ejecutable
+        "--name=GD_Downloader",        # Nombre del ejecutable
+        "--version-file=version.txt",  # Archivo con metadatos de versión
+        "main.py"                      # Archivo de entrada
     ]
-    
+
+    # Añadir los archivos de datos al comando
+    for file in add_data_files:
+        cmd.extend(["--add-data", file])
+
     print(f"Ejecutando: {' '.join(cmd)}")
     
     try:

@@ -4,6 +4,14 @@ import gdown
 import threading
 import os
 import sys
+import multiprocessing
+import re
+import io
+import contextlib
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde el archivo .env
+load_dotenv()
 
 class GoogleDriveDownloader:
     def __init__(self, root):
@@ -15,10 +23,9 @@ class GoogleDriveDownloader:
         self.center_window()
         # Configurar el contenido de la interfaz
         self.setup_ui()
-        # ID del archivo de Google Drive (esto se enmascara para el usuario)
-        self.file_id = "1rl-nO3nZ-8qAj-L7MRyGfL5ipsTuREeM"
+        # ID del archivo de Google Drive (desde .env)
+        self.file_id = os.getenv("FILE_ID")
         # Nombre del archivo a descargar (se obtiene automáticamente)
-        self.filename = None
         # Flag para evitar descargas múltiples
         self.download_started = False
 
@@ -62,83 +69,51 @@ class GoogleDriveDownloader:
         download_thread.daemon = True
         download_thread.start()
 
-    def get_drive_metadata(self, file_id):
-        """Obtiene nombre y tamaño del archivo desde Google Drive, manejando archivos grandes y ejecutables"""
-        import requests
-        import re
-        url_download = f"https://drive.google.com/uc?export=download&id={file_id}"
-        with requests.Session() as session:
-            response = session.get(url_download, stream=True)
-            filename = None
-            # Intentar obtener el nombre del archivo desde la cabecera
-            if 'Content-Disposition' in response.headers:
-                cd = response.headers['Content-Disposition']
-                fname = re.findall('filename="(.+?)"', cd)
-                if fname:
-                    filename = fname[0]
-            size = int(response.headers.get('content-length', 0))
-            # Si no se obtuvo el nombre, intentar con confirmación para archivos grandes
-            if not filename or size == 0 or 'Set-Cookie' in response.headers or 'confirmation' in response.text:
-                confirm_token = re.search(r'confirm=([0-9A-Za-z_]+)', response.text)
-                if confirm_token:
-                    token = confirm_token.group(1)
-                    url_confirm = f"https://drive.google.com/uc?export=download&confirm={token}&id={file_id}"
-                    response2 = session.get(url_confirm, stream=True)
-                    if 'Content-Disposition' in response2.headers:
-                        cd = response2.headers['Content-Disposition']
-                        fname = re.findall('filename="(.+?)"', cd)
-                        if fname:
-                            filename = fname[0]
-                    size = int(response2.headers.get('content-length', 0))
-            # Fallback: si sigue sin nombre, usar el id y extensión genérica
-            if not filename:
-                # Intentar obtener la extensión desde la URL de redirección
-                ext = '.bin'
-                if response.url.endswith('.exe'):
-                    ext = '.exe'
-                filename = f"archivo_{file_id}{ext}"
-            return filename, size
-
     def download_file(self):
-        """Descarga el archivo de Google Drive usando gdown como subproceso y actualiza la barra de progreso en tiempo real"""
-        import subprocess
-        import os
-        import sys
-        import re
+        """Descarga el archivo de Google Drive usando gdown como biblioteca y captura el progreso."""
+
+        class TqdmRedirect(io.TextIOBase):
+            def __init__(self, app):
+                self.app = app
+                self.last_percent = -1
+
+            def write(self, s):
+                # tqdm, por defecto, escribe el progreso en stderr. Lo capturamos aquí.
+                # Ejemplo: "  9%|▉         | 50.1M/555M [00:03<00:33, 15.2MB/s]"
+                match = re.search(r"(\d+)%", s)
+                if match:
+                    percent = int(match.group(1))
+                    # Solo actualizar si el porcentaje ha cambiado para evitar sobrecargar la GUI
+                    if percent != self.last_percent:
+                        self.last_percent = percent
+                        # Usar root.after para actualizar la GUI desde el hilo de descarga de forma segura
+                        self.app.root.after(0, self.app.update_progress, percent)
+                return len(s)
+
+        def update_progress(percent):
+            """Función para actualizar la barra de progreso y la etiqueta de estado."""
+            self.progress.configure(value=percent)
+            self.status_label.config(text=f"Descargando... {percent}%")
+
+        self.update_progress = update_progress
+
         try:
             url = f"https://drive.google.com/uc?id={self.file_id}"
-            self.status_label.config(text="Descargando archivo...")
-            # Ejecutar gdown como subproceso
-            cmd = [sys.executable, '-m', 'gdown', url, '--fuzzy']
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1)
-            filename = None
-            size_mb = None
-            if process.stdout:
-                for line in iter(process.stdout.readline, ''):
-                    # Buscar nombre del archivo
-                    match_to = re.search(r'To: (.+)', line)
-                    if match_to:
-                        filename = match_to.group(1).strip()
-                    # Buscar tamaño total
-                    match_size = re.search(r'\|\s*([\d\.]+)M/([\d\.]+)M', line)
-                    if match_size:
-                        size_mb = float(match_size.group(2))
-                    # Buscar porcentaje
-                    match_percent = re.search(r'(\d+)%\|', line)
-                    if match_percent:
-                        percent = int(match_percent.group(1))
-                        self.root.after(0, lambda p=percent: self.progress.configure(value=p))
-                        if filename and size_mb:
-                            self.root.after(0, lambda p=percent, f=filename, s=size_mb: self.status_label.config(text=f"Descargando: {f} ({p}%) de {round(s,2)} MB"))
-            process.wait()
-            # Verificar si se descargó correctamente
-            if filename and os.path.exists(filename):
-                size = os.path.getsize(filename)
-                self.status_label.config(text=f"Descargado: {filename} ({round(size/1024/1024,2)} MB)")
-                self.progress['value'] = 100
+            self.root.after(0, lambda: self.status_label.config(text="Iniciando descarga..."))
+
+            output_filename = None
+            # Redirigir stderr para capturar la salida de la barra de progreso de tqdm
+            with contextlib.redirect_stderr(TqdmRedirect(self)):
+                # quiet=False es necesario para que gdown/tqdm impriman la barra de progreso
+                output_filename = gdown.download(url=url, quiet=False, fuzzy=True)
+
+            if output_filename and os.path.exists(output_filename):
+                size = os.path.getsize(output_filename)
+                self.root.after(0, lambda: self.status_label.config(text=f"Descargado: {output_filename} ({round(size/1024/1024,2)} MB)"))
+                self.root.after(0, lambda: self.progress.configure(value=100))
                 self.root.after(0, self.show_success_message)
             else:
-                self.root.after(0, lambda: self.show_error_message("El archivo no se descargó correctamente"))
+                self.root.after(0, lambda: self.show_error_message("El archivo no se descargó o no se encontró."))
         except Exception as e:
             error_msg = str(e)
             if "404" in error_msg or "not found" in error_msg.lower() or "not accessible" in error_msg.lower():
@@ -149,17 +124,14 @@ class GoogleDriveDownloader:
                 self.root.after(0, lambda: self.show_error_message(f"Error durante la descarga: {error_msg}"))
 
     def show_success_message(self):
-        """Muestra mensaje de descarga completada"""
+        """Muestra mensaje de descarga completada y cierra la aplicación"""
         messagebox.showinfo("Éxito", "¡Descarga completada con éxito!")
-        self.progress['value'] = 100
-        self.status_label.config(text="Descarga completada")
-    # ...eliminado: no hay botón de inicio
+        self.root.destroy()
 
     def show_error_message(self, message):
-        """Muestra mensaje de error"""
+        """Muestra mensaje de error y cierra la aplicación"""
         messagebox.showerror("Error", message)
-        self.status_label.config(text="Error en la descarga")
-    # ...eliminado: no hay botón de inicio
+        self.root.destroy()
 
     def start_auto_download(self):
         """Inicia automáticamente la descarga cuando se abre la aplicación"""
@@ -176,4 +148,6 @@ def main():
     root.mainloop()
 
 if __name__ == "__main__":
+    # Necesario para que PyInstaller funcione correctamente en Windows
+    multiprocessing.freeze_support()
     main()
